@@ -1,0 +1,737 @@
+---
+title: "First_Try"
+author: "Letian Yin, S2179686"
+date: "2022/6/8"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Load data
+
+```{r}
+load("easySHARE_rel8_0_0.rda")
+```
+
+#### Load packages
+
+```{r packs, message = FALSE}
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(bnlearn)
+library(Rgraphviz)
+library(Amelia)
+library(MASS)
+```
+
+## Exploratory Data Analysis
+
+#### Extract all the variables we'll use
+
+According to some literature reviews and the easySHARE guide, we can choose all variables we might use in dataset.
+
+```{r}
+df <- easySHARE_rel8_0_0 %>%  dplyr::select(c(wave, country, age, female, isced1997_r, partnerinhh, ch007_hh, ch007_km, sp002_mod, sp008_, chronic_mod, hc002_mod, hc012_, hc029_, eurod, adla, iadlza, mobilityind, lgmuscle, grossmotor, finemotor, br015_, recall_1, recall_2, orienti, numeracy_1, numeracy_2, bmi2, smoking, ever_smoked, br010_mod, ep005_, co007_))
+```
+
+#### Investigating missingness
+
+In this easySHARE dataset, value \< 0 means different kinds of missingness. As we want to focus on cross-sectional analysis, we want a specific wave which contains most data. Therefore, we set all missing values to NA and have a look at the pattern for different waves.
+
+```{r}
+# copy and set NA
+df_ <- df
+df_[df_<0] <- NA
+
+# a loop to create plots for 8 waves
+for (i in 1:8){
+  df_part <- df_[df_$wave == i, ]
+  missmap(df_part, col = c('firebrick1', 'dodgerblue'))
+}
+
+```
+
+#### Extract wave5
+
+```{r}
+df2 <- df[df$wave==5, ]
+```
+
+#### 1. Country
+
+Based on the GDP per capita in 2013(survey took place in this year), divide all countries into two groups with a boundary of \$40K.
+
+Data Source: <https://countryeconomy.com/gdp?year=2013>
+
+In this step we will divide countries into 2 groups: GDP per capita higher(2) or lower(1) than \$40k. The countries with higher GDP per capita are: 31 Luxembourg, 20 Switzerland, 18 Denmark, 13 Sweden, 14 Netherlands, 11 Austria, 23 Belgium, 12 Germany, and 17 France (in order).
+
+```{r}
+# GDP per capita lower than $40k
+df2$country[which(df2$country == 15 | df2$country == 16 | df2$country == 25 | df2$country == 28 | df2$country == 34 | df2$country == 35)] <- 1
+
+# GDP per capita higher than $40k
+df2$country[which(df2$country == 11 | df2$country == 12 | df2$country == 13 | df2$country == 14 | df2$country == 17 | df2$country == 18 | df2$country == 20 | df2$country == 23 | df2$country == 31)] <- 2
+
+df2$country <- factor(df2$country, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$country),color="darkblue", fill="lightblue")+ labs(x ="Country")
+```
+
+#### 2. Age
+
+As there are only a little data of age lower than 50, we will only focus on age bigger than 50.
+
+```{r}
+# Extract data no less than 50
+df2 <- df2[df2$age >=50, ]
+
+# cut into bins
+df2$age <- cut(df2$age, breaks = c(seq(50,85,5),105), ordered_result = TRUE, right = FALSE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$age),color="darkblue", fill="lightblue")+
+  labs(x ="Age")
+```
+
+#### 3. Sex
+
+There is no missing value in wave 5, so we just need to factorize this variable.
+
+```{r}
+# factorize
+df2$female <- factor(df2$female)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$female),color="darkblue", fill="lightblue")+
+  labs(x ="Sex")
+```
+
+#### 4. Education
+
+We will only focus on those whose values are in range 0-6, and factorize them orderly.
+
+```{r}
+# rename
+df2 <- df2 %>% rename(education = isced1997_r)
+
+# extract those with values equal to 0-6
+df2 <- filter(df2, education %in% c(0, 1, 2, 3, 4, 5, 6))
+
+# plot before processing
+ggplot() + geom_bar(aes(x = df2$education),color="darkblue", fill="lightblue")+labs(x ="Education", title = "Before processing")
+
+# reassign due to small counts
+df2$education[which(df2$education == 0)] <- 1
+df2$education[which(df2$education == 5 | df2$education == 6)] <- 4
+
+# factorize
+df2$education <- factor(df2$education, ordered = TRUE)
+
+# plot after processing
+ggplot() + geom_bar(aes(x = df2$education),color="darkblue", fill="lightblue")+ labs(x ="Education", title = "After processing")
+
+```
+
+#### 5. Social Contact
+
+5 variables are used to measure social contact: partnerinhh, ch007_hh, ch007_km, sp002_mod, and sp008\_. The higher the final value is, the more social contact it means.
+
+```{r}
+# partnerinhh
+# The values only contain 1 or 3, and we set value 3 to 0 as it means living without spouse/partner in household.
+df2$partnerinhh[which(df2$partnerinhh == 3)] <- 0
+
+# other variables
+# The values only contain 1, 5, or less than 0. We set value 5 to 0 as it means less social contact. We set values less than 0 to 0 as well, since this is relatively more conservative.
+df2$ch007_hh[which(df2$ch007_hh == 5 | df2$ch007_hh < 0)] <- 0
+df2$ch007_km[which(df2$ch007_km == 5 | df2$ch007_km < 0)] <- 0
+df2$sp002_mod[which(df2$sp002_mod == 5 | df2$sp002_mod < 0)] <- 0
+df2$sp008_[which(df2$sp008_ == 5 | df2$sp008_ < 0)] <- 0
+
+# Now we combine these 5 variables together by simply adding values.
+df2$social <- df2$partnerinhh + df2$ch007_hh + df2$ch007_km + df2$sp002_mod + df2$sp008_
+
+# reassign due to small counts
+df2$social[which(df2$social == 5)] <- 4
+
+df2$social <- factor(df2$social, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$social),color="darkblue", fill="lightblue")+
+  labs(x ="Social Contact")
+```
+
+#### 6. Physical Health
+
+4 variables are used to measure health status: chronic_mod, hc002_mod, hc012\_, and hc029\_. The higher the final value is, the healthier the person is.
+
+```{r}
+# chronic_mod
+# delete values less than 0
+df2 <- df2[-which(df2$chronic_mod < 0), ]
+
+# hc002_mod
+# delete values less than 0; reassign values according to different visiting numbers
+df2 <- df2[-which(df2$hc002_mod < 0), ]
+df2$hc002_mod[which(df2$hc002_mod < 10)] <- 0
+df2$hc002_mod[which(df2$hc002_mod >= 10 & df2$hc002_mod < 30)] <- 1
+df2$hc002_mod[which(df2$hc002_mod >= 30 & df2$hc002_mod < 50)] <- 2
+df2$hc002_mod[which(df2$hc002_mod >= 50 & df2$hc002_mod < 70)] <- 3
+df2$hc002_mod[which(df2$hc002_mod >= 70 & df2$hc002_mod < 90)] <- 4
+df2$hc002_mod[which(df2$hc002_mod >= 90)] <- 5
+
+# hc012_
+# delete values less than 0; set value 5 to 0
+df2 <- df2[-which(df2$hc012_ < 0), ]
+df2$hc012_[which(df2$hc012_ == 5)] <- 0
+
+# hc029_
+# delete values less than 0; set value 5 to 0
+df2 <- df2[-which(df2$hc029_ < 0), ]
+df2$hc029_[which(df2$hc029_ == 5)] <- 0
+
+# combine them and reorder
+df2$health <- df2$chronic_mod + df2$hc002_mod + df2$hc012_ + df2$hc029_
+df2$health <- max(df2$health) - df2$health
+
+# as there are 14 different levels, which is too many, we redivide it again according to the number of different levels
+df2$health[which(df2$health >= 0 & df2$health < 8)] <- 1
+df2$health[which(df2$health >= 8 & df2$health < 12)] <- 2
+df2$health[which(df2$health >= 12)] <- 3
+
+df2$health <- factor(df2$health, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$health),color="darkblue", fill="lightblue")+
+    labs(x ="Physical Health")
+```
+
+#### 7. Depression
+
+eurod is used to measure depression The higher, the more depressed the person is.
+
+```{r}
+df2 <- df2 %>% rename(depression = eurod)
+# delete values less than 0
+df2 <- df2[-which(df2$depression < 0), ]
+
+# cut into bins
+df2$depression <- cut(df2$depression, breaks = c(0, 2, 5, 8, 13), ordered_result = TRUE, right = FALSE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$depression),color="darkblue", fill="lightblue")+
+    labs(x ="Depression")
+```
+
+#### 8. Daily Physical Activity
+
+7 variables are used to measure this: adla, iadlza, mobilityind, lgmuscle, grossmotor, finemotor, and br015\_. The higher the value is, the better daily physical activity ability the person has.
+
+```{r}
+# delete missing values
+df2 <- df2[-which(df2$adla<0 | df2$iadlza<0 | df2$mobilityind<0 | df2$lgmuscle<0 | df2$grossmotor<0 | df2$finemotor<0 | df2$br015_<0), ]
+
+# combine them together
+df2$daily <- df2$adla + df2$iadlza + df2$mobilityind + df2$lgmuscle + df2$grossmotor + df2$finemotor + df2$br015_
+df2$daily <- max(df2$daily) - df2$daily
+
+# cut into bins
+df2$daily <- cut(df2$daily, breaks = c(0, 10, 20, 26, 30), ordered_result = TRUE, right = FALSE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$daily),color="darkblue", fill="lightblue")+
+    labs(x ="Daily Physical Activity")
+```
+
+#### 9. Obesity
+
+bmi2 is used to measure obesity. The higher the value is, the fatter the person is.
+
+```{r}
+df2 <- df2 %>% rename(obesity = bmi2)
+# delete values less than 0
+df2 <- df2[-which(df2$obesity < 0), ]
+df2$obesity <- factor(df2$obesity, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$obesity),color="darkblue", fill="lightblue")+ labs(x ="Obesity")
+```
+
+#### 10. Smoking
+
+2 variables are used to measure this: smoking and ever_smoked.
+
+```{r}
+# delete values less than 0 
+df2 <- df2[-which(df2$ever_smoked < 0), ]
+df2 <- df2[-which(df2$smoking < 0), ]
+
+df2$smoking[which(df2$smoking == 5)] <- 0
+df2$ever_smoked[which(df2$ever_smoked == 5)] <- 0
+# combine together
+df2$smoking <- df2$smoking + df2$ever_smoked
+df2$smoking[which(df2$smoking == 2)] <- 1
+df2$smoking <- factor(df2$smoking, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$smoking),color="darkblue", fill="lightblue")+
+    labs(x ="Smoking")
+```
+
+#### 11. Drinking
+
+br010_mod is used to measure this.
+
+```{r}
+df2 <- df2 %>% rename(drinking = br010_mod)
+# delete values less than 0 
+df2 <- df2[-which(df2$drinking < 0), ]
+
+# reassign
+df2$drinking[which(df2$drinking == 1 | df2$drinking == 2)] <- 1
+df2$drinking[which(df2$drinking == 3 | df2$drinking == 4)] <- 2
+df2$drinking[which(df2$drinking >= 5)] <- 3
+
+df2$drinking <- factor(df2$drinking, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$drinking),color="darkblue", fill="lightblue")+
+    labs(x ="Drinking")
+```
+
+#### 12. Work Status
+
+ep005\_ is used to measure this. we'll reorder this variable:
+
+0: retired(1), unemployed(3), permanently sick or disabled(4)
+
+1: homemaker(5) or other(97)
+
+2: employed or self-employed(2)
+
+```{r}
+df2 <- df2 %>% rename(work = ep005_)
+# delete values less than 0 
+df2 <- df2[-which(df2$work < 0), ]
+
+# reassign
+df2$work[which(df2$work == 1 | df2$work == 3 | df2$work == 4)] <- 0
+df2$work[which(df2$work == 5 | df2$work == 97)] <- 1
+
+df2$work <- factor(df2$work, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$work),color="darkblue", fill="lightblue")+
+    labs(x ="Working Status")
+```
+
+#### 13. Income
+
+co007\_ is used to measure this.
+
+```{r}
+df2 <- df2 %>% rename(income = co007_)
+# delete values less than 0 
+df2 <- df2[-which(df2$income < 0), ]
+
+# reassign
+df2$income[which(df2$income == 1 | df2$income == 2)] <- 1
+df2$income[which(df2$income == 3)] <- 2
+df2$income[which(df2$income == 4)] <- 3
+
+df2$income <- factor(df2$income, ordered = TRUE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$income),color="darkblue", fill="lightblue")+
+    labs(x ="Income")
+```
+
+#### 14. Cognitive Score
+
+3 variables are used to measure this: recall_1, recall_2, and numeracy_2.
+
+```{r}
+# delete missing values
+df2 <- df2[-which(df2$recall_1<0 | df2$recall_2<0 | df2$numeracy_2<0), ]
+df2$cogscore <- df2$recall_1 + df2$recall_2 + df2$numeracy_2
+
+# cut into bins according to quantiles
+df2$cogscore <- cut(df2$cogscore, breaks = c(0,quantile(df2$cogscore, probs = c(.1,.4),na.rm=TRUE), max(df2$cogscore)+1), ordered_result = TRUE, right = FALSE)
+
+# plot
+ggplot() + geom_bar(aes(x = df2$cogscore),color="darkblue", fill="lightblue")+
+    labs(x ="Cognitive Score")
+```
+
+#### Final dataframe
+
+```{r}
+# extract data
+cog <- data.frame(df2$country, df2$age, df2$female, df2$education,
+                  df2$social, df2$health, df2$depression, df2$daily,
+                  df2$obesity, df2$smoking, df2$drinking, df2$work, 
+                  df2$income, df2$cogscore)
+
+# column names
+colnames(cog) <- c("country", "age", "female", "education", 
+                   "social", "health", "depression", "daily", 
+                   "obesity", "smoking", "drinking", "work", 
+                   "income", "cogscore")
+summary(cog)
+```
+
+## Create DAG structure
+
+#### Blacklist
+
+```{r}
+# create blacklist of edges
+myblacklist <- matrix(c("cogscore", "age",
+                        "female", "age",
+                        "education", "age",
+                        "work", "age",
+                        "income", "age",
+                        "country", "age",
+                        "health", "age", 
+                        "daily", "age",
+                        "depression", "age",
+                        "social", "age",
+                        "obesity", "age",
+                        "smoking", "age",
+                        "drinking", "age",
+                        "cogscore", "female",
+                        "age", "female",
+                        "education", "female",
+                        "work", "female",
+                        "income", "female",
+                        "country", "female",
+                        "health", "female", 
+                        "daily", "female",
+                        "depression", "female",
+                        "social", "female",
+                        "obesity", "female",
+                        "smoking", "female",
+                        "drinking", "female",
+                        "cogscore", "country",
+                        "age", "country",
+                        "education", "country",
+                        "work", "country",
+                        "income", "country",
+                        "female", "country",
+                        "health", "country", 
+                        "daily", "country",
+                        "depression", "country",
+                        "social", "country",
+                        "obesity", "country",
+                        "smoking", "country",
+                        "drinking", "country",
+                        "cogscore", "education",
+                        "cogscore", "work",
+                        "cogscore", "income",
+                        "cogscore", "health",
+                        "cogscore", "daily",
+                        "cogscore", "obesity",
+                        "cogscore", "smoking",
+                        "cogscore", "drinking",
+                        "cogscore", "depression",
+                        "cogscore", "social",
+                        "social", "education",
+                        "depression", "education",
+                        "obesity", "education",
+                        "smoking", "education",
+                        "drinking", "education",
+                        "work", "education",
+                        "income", "education",
+                        "health", "education",
+                        "daily", "education",
+                        "smoking", "income",
+                        "drinking", "income",
+                        "obesity", "income",
+                        "social", "income",
+                        "depression", "income",
+                        "income", "work",
+                        "social", "work",
+                        "obesity", "work",
+                        "smoking", "work",
+                        "drinking", "work",
+                        "daily", "work",
+                        "female", "daily",
+                        "income", "daily",
+                        "education", "daily",
+                        "social", "daily",
+                        "smoking", "daily",
+                        "drinking", "daily",
+                        "work", "daily",
+                        "social", "health",
+                        "education", "health",
+                        "obesity", "depression",
+                        "smoking", "depression",
+                        "drinking", "depression",
+                        "daily", "depression",
+                        "country", "depression",
+                        "female", "depression",
+                        "obesity", "social",
+                        "age", "social",
+                        "female", "social",
+                        "education", "social",
+                        "country", "social",
+                        "income", "social",
+                        "work", "social",
+                        "obesity", "social",
+                        "smoking", "social",
+                        "drinking", "social",
+                        "income", "obesity",
+                        "work", "obesity",
+                        "daily", "obesity",
+                        "smoking", "obesity",
+                        "drinking", "obesity",
+                        "social", "obesity",
+                        "age", "smoking",
+                        "work", "smoking",
+                        "income", "smoking",
+                        "daily", "smoking",
+                        "depression", "smoking",
+                        "drinking", "smoking",
+                        "social", "smoking",
+                        "age", "drinking",
+                        "work", "drinking",
+                        "income", "drinking",
+                        "daily", "drinking",
+                        "obesity", "drinking",
+                        "smoking", "drinking",
+                        "social", "drinking"),
+                      byrow=TRUE,ncol=2,dimnames=list(NULL,c("from","to")))
+```
+
+#### Whitelist
+
+```{r}
+# create whitelist of edges
+mywhitelist <- matrix(c("work", "income",
+                        "daily", "health",
+                        "obesity", "health",
+                        "social", "depression",
+                        "health", "cogscore",
+                        "drinking", "health", 
+                        "smoking", "health"),
+                      byrow=TRUE,ncol=2,dimnames=list(NULL,c("from","to")))
+```
+
+#### DAG structure building
+
+Different algorithms were implemented to construct the DAG structure.
+
+```{r}
+# Use incremental association Markov blanket to learn the DAG
+iamb1 = iamb(cog,
+             whitelist = mywhitelist, blacklist = myblacklist, 
+             test="mi")
+
+iamb2 = iamb(cog,
+             whitelist = mywhitelist, blacklist = myblacklist, 
+             test="x2")
+
+# Use hill-climbing to learn the DAG
+hc1 = hc(cog, 
+         whitelist = mywhitelist, blacklist = myblacklist, 
+         score="bde")
+
+hc2 = hc(cog, 
+         whitelist = mywhitelist, blacklist = myblacklist, 
+         score="bic")
+```
+
+```{r}
+# We can compare these DAG using cross validation
+set.seed(41)
+loss(bn.cv(cog, iamb1, loss="pred", loss.args = list(target = "cogscore")))
+loss(bn.cv(cog, iamb2, loss="pred", loss.args = list(target = "cogscore")))
+loss(bn.cv(cog, hc1, loss="pred", loss.args = list(target = "cogscore")))
+loss(bn.cv(cog, hc2, loss="pred", loss.args = list(target = "cogscore")))
+```
+
+hc2 has the lowest loss. Now we can check the structure of this model.
+
+```{r}
+graphviz.plot(hc2)
+```
+
+There seems to be no direct relation between female and cognitive score, but we think they surely have relations. So we can take a test to check.
+
+```{r}
+# test between female and cogscore
+ci.test("female", "cogscore", test = "mi", data = cog)
+```
+
+The test is significant, thus we can add this arrow manually.
+
+```{r}
+hc <- set.arc(hc2, "female", "cogscore")
+```
+
+Also, we can compare the scores of 2 DAG structures before and after adding the arrow from female to cogscore.
+
+```{r}
+score(hc2, data = cog, type = "bic")
+score(hc, data = cog, type = "bic")
+score(hc2, data = cog, type = "bde", iss = 10)
+score(hc, data = cog, type = "bde", iss = 10)
+```
+
+The score is almost the same, thus for later analysis, we can keep this arrow for convenience.
+
+```{r}
+# plot the final DAG structure
+graphviz.plot(hc)
+```
+
+```{r}
+# fit
+# custom fit
+# I've tried custom fit, but the line plots were worse than original fit. The plots using original fit have been good enough, so I gave up custom fit.
+bn.bayes = bn.fit(hc, data=cog, method = "bayes", iss = 100)
+```
+
+```{r}
+# Here we draw 2 plots, representing male and female respectively. Keeping education and health level the same, draw age against conditional probabilities of different cognitive score ranges.
+p1 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$age))),3),
+                     y=matrix(t(bn.bayes$cogscore$prob[,,1,4,3]), ncol =1), color = rep(levels(cog$cogscore), each = length(levels(cog$age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$age))),
+        labels=levels(cog$age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="Male, Education Level 4, Physical Health Level 3")
+
+
+p2 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$age))),3),
+                     y=matrix(t(bn.bayes$cogscore$prob[,,2,4,3]), ncol =1), color = rep(levels(cog$cogscore), each = length(levels(cog$age))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$age))),
+        labels=levels(cog$age)) +
+  labs(x = "Age", y= "Conditional probability", color = "Cognitive score", title ="Female, Education Level 4, Physical Health Level 3")
+
+grid.arrange(p1, p2)
+```
+
+```{r}
+# Here we draw 2 plots, representing male and female respectively. Keeping age range and health level the same, draw education level against conditional probabilities of different cognitive score ranges.
+
+# extract the probability matrix we need manually
+mat3 <- matrix(t(cbind(bn.bayes$cogscore$prob[,,1,1,2][,5],
+                       bn.bayes$cogscore$prob[,,1,2,2][,5],
+                       bn.bayes$cogscore$prob[,,1,3,2][,5],
+                       bn.bayes$cogscore$prob[,,1,4,2][,5])),
+                 ncol = 1)
+
+mat4 <- matrix(t(cbind(bn.bayes$cogscore$prob[,,2,1,2][,5],
+                       bn.bayes$cogscore$prob[,,2,2,2][,5],
+                       bn.bayes$cogscore$prob[,,2,3,2][,5],
+                       bn.bayes$cogscore$prob[,,2,4,2][,5])),
+                 ncol = 1)
+
+# plot
+p3 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$education))),3),
+                     y=mat3, color = rep(levels(cog$cogscore), each = length(levels(cog$education))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$education))),
+        labels=levels(cog$education)) +
+  labs(x = "Education", y= "Conditional probability", color = "Cognitive score", title ="Male, Age range [70,75), Physical Health Level 2")
+
+p4 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$education))),3),
+                     y=mat4, color = rep(levels(cog$cogscore), each = length(levels(cog$education))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$education))),
+        labels=levels(cog$education)) +
+  labs(x = "Education", y= "Conditional probability", color = "Cognitive score", title ="Female, Age range [70,75), Physical Health Level 2")
+
+grid.arrange(p3, p4)
+```
+
+```{r}
+# Here we draw 2 plots, representing male and female respectively. Keeping age range and education level the same, draw health level against conditional probabilities of different cognitive score ranges.
+
+# extract the probability matrix we need manually
+mat5 <- matrix(t(cbind(bn.bayes$cogscore$prob[,,1,1,1][,5],
+                       bn.bayes$cogscore$prob[,,1,1,2][,5],
+                       bn.bayes$cogscore$prob[,,1,1,3][,5])),
+                 ncol = 1)
+
+mat6 <- matrix(t(cbind(bn.bayes$cogscore$prob[,,2,1,1][,5],
+                       bn.bayes$cogscore$prob[,,2,1,2][,5],
+                       bn.bayes$cogscore$prob[,,2,1,3][,5])),
+                 ncol = 1)
+
+p5 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$health))),3),
+                     y=mat5, color = rep(levels(cog$cogscore), each = length(levels(cog$health))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$health))),
+        labels=levels(cog$health)) +
+  labs(x = "Health", y= "Conditional probability", color = "Cognitive score", title ="Male, Age range [70,75), Education Level 1")
+
+p6 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$health))),3),
+                     y=mat6, color = rep(levels(cog$cogscore), each = length(levels(cog$health))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$health))),
+        labels=levels(cog$health)) +
+  labs(x = "Health", y= "Conditional probability", color = "Cognitive score", title ="Female, Age range [70,75), Education Level 1")
+
+grid.arrange(p5, p6)
+```
+
+```{r}
+# relationship between income and country, with education level 2, work status 2
+p7 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$country))),3),
+                     y=matrix(t(bn.bayes$income$prob[,,2,3]), ncol =1), color = rep(levels(cog$income), each = length(levels(cog$country))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$country))),
+        labels=levels(cog$country)) +
+  labs(x = "Country", y= "Conditional probability", color = "Income", title ="Income and Country")
+
+# Relationship between education and country. Female, with age range [65, 70)
+p8 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$country))),4),
+                     y=matrix(t(bn.bayes$education$prob[,,4, 2]), ncol =1), color = rep(levels(cog$education), each = length(levels(cog$country))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$country))),
+        labels=levels(cog$country)) +
+  labs(x = "Country", y= "Conditional probability", color = "Education", title ="Education and Country")
+
+# Relationship between smoking and country. Female, education level 3
+p9 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$country))),2),
+                     y=matrix(t(bn.bayes$smoking$prob[,,2, 3]), ncol =1), color = rep(levels(cog$smoking), each = length(levels(cog$country))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$country))),
+        labels=levels(cog$country)) +
+  labs(x = "Country", y= "Conditional probability", color = "Smoking", title ="Smoking and Country")
+
+# Relationship between drinking and country. Male, with education level 4 
+p10 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$country))),3),
+                     y=matrix(t(bn.bayes$drinking$prob[,,1, 4]), ncol =1), color = rep(levels(cog$drinking), each = length(levels(cog$country))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$country))),
+        labels=levels(cog$country)) +
+  labs(x = "Country", y= "Conditional probability", color = "Drinking", title ="Drinking and Country")
+
+# Relationship between obesity and country. Female, with education level 3 
+p11 = ggplot(mapping = aes(x = rep(seq(1:length(levels(cog$country))),4),
+                     y=matrix(t(bn.bayes$obesity$prob[,,2, 3]), ncol =1), color = rep(levels(cog$obesity), each = length(levels(cog$country))))) + 
+  geom_point() +
+  geom_line() +
+  scale_x_discrete(breaks=seq(1:length(levels(cog$country))),
+        labels=levels(cog$country)) +
+  labs(x = "Country", y= "Conditional probability", color = "Obesity", title ="Obesity and Country")
+
+grid.arrange(p7, p8, p9, p10, p11)
+```
